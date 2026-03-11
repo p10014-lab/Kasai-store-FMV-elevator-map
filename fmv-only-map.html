@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FMVビジョン・スシロー・マルエツ マップ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Hiragino Sans', 'Meiryo', sans-serif; display: flex; flex-direction: column; height: 100vh; }
+
+/* === トップバナー（元マップ準拠） === */
+#top-banner {
+  background: linear-gradient(135deg, #0f1f3d 0%, #1a3a6b 100%);
+  color: #fff; padding: 8px 16px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+}
+#top-banner .title-area h1 { font-size: 15px; font-weight: 700; }
+#top-banner .title-area p  { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+#top-banner .counts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; }
+#top-banner .counts span { display: flex; align-items: center; gap: 5px; }
+#top-banner .counts .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* === トグルボタン行 === */
+#toggle-bar {
+  background: #fff; padding: 8px 14px; border-bottom: 1px solid #e5e8ef;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.toggle-btn {
+  padding: 6px 14px; border-radius: 20px; border: none;
+  color: #fff; cursor: pointer; font-size: 12px; font-weight: 700;
+  opacity: 1; transition: opacity .2s, transform .1s;
+  display: flex; align-items: center; gap: 5px;
+}
+.toggle-btn.off { opacity: 0.35; }
+.toggle-btn:active { transform: scale(0.96); }
+.hint { margin-left: auto; font-size: 11px; color: #999; }
+
+#map { flex: 1; }
+
+/* プログレス */
+#progress-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.82);
+  z-index: 9999; align-items: center; justify-content: center; flex-direction: column;
+}
+#progress-overlay.show { display: flex; }
+.spinner { width: 44px; height: 44px; border: 4px solid #e0e6f0; border-top-color: #7DC832; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#progress-text { font-size: 13px; color: #444; font-weight: 600; }
+
+/* エラーパネル */
+#error-panel { display:none; position:fixed; bottom:20px; right:20px; max-width:320px; background:#fff3f3; border:1px solid #f5c6cb; border-radius:8px; padding:12px; font-size:11px; z-index:1000; max-height:200px; overflow-y:auto; }
+#error-panel h4 { color:#c62828; margin-bottom:6px; }
+
+/* 凡例 */
+.legend { background:rgba(255,255,255,0.93); border-radius:6px; padding:10px 14px; box-shadow:0 2px 8px rgba(0,0,0,0.13); font-size:12px; line-height:2; }
+.legend b { display:block; margin-bottom:2px; color:#444; }
+.ldot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+</style>
+</head>
+<body>
+
+<!-- トップバナー -->
+<div id="top-banner">
+  <div class="title-area">
+    <h1>サイネージ配信マップ</h1>
+    <p>ファミリーマートビジョン・スシロー・マルエツ</p>
+  </div>
+  <div class="counts">
+    <span><span class="dot" style="background:#7DC832"></span>FM: <b id="cnt-fm">0</b>/<span id="tot-fm">115</span>件</span>
+    <span><span class="dot" style="background:#E53935"></span>スシロー: <b id="cnt-su">0</b>/<span id="tot-su">2</span>件</span>
+    <span><span class="dot" style="background:#FF6D00"></span>マルエツ: <b id="cnt-mx">0</b>/<span id="tot-mx">1</span>件</span>
+  </div>
+</div>
+
+<!-- トグルボタン -->
+<div id="toggle-bar">
+  <button class="toggle-btn" id="btn-fm" style="background:#7DC832;" onclick="toggleLayer('fm')">
+    ● ファミリーマートビジョン
+  </button>
+  <button class="toggle-btn" id="btn-su" style="background:#E53935;" onclick="toggleLayer('su')">
+    ● スシロー
+  </button>
+  <button class="toggle-btn" id="btn-mx" style="background:#FF6D00;" onclick="toggleLayer('mx')">
+    ● マルエツ
+  </button>
+  <span class="hint">ピンをクリックすると住所が表示されます</span>
+</div>
+
+<div id="map"></div>
+<div id="progress-overlay"><div class="spinner"></div><div id="progress-text">読み込み中...</div></div>
+<div id="error-panel"><h4>⚠️ 住所未取得リスト</h4><div id="error-list"></div></div>
+
+<script>
+const FM_RAW = ["浦安市堀江３－２７－１５","江戸川区東葛西７－９－１０","江戸川区南葛西４丁目６－８","江戸川区南葛西三丁目２４番１６号","江戸川区南葛西三丁目１５番１５号","浦安市東野１－３－１","江戸川区東葛西３丁目１１番１２号","江戸川区中葛西３－３６－９第２彦本ビル１Ｆ","浦安市当代島１－１－２５板徳ビル１Ｆ","浦安市北栄一丁目１３番１７号","江戸川区中葛西６－１－１０","浦安市海楽１－１－７","浦安市北栄二丁目４番１１号","浦安市北栄４－１７－４７","浦安市北栄４－２８－１１","江戸川区西葛西６－１５－１２","浦安市鉄鋼通り２丁目１番８号","江戸川区西葛西６丁目１３番１２号","江戸川区西葛西五丁目２番９号","市川市南行徳３－３－２０","江戸川区北葛西四丁目１３番５号","江戸川区西葛西六丁目７番１","浦安市入船１丁目１番の１　１階６０７０","江戸川区西葛西３－６－１１","江戸川区船堀７丁目６番２０号","市川市福栄３－１０－１０","江戸川区一之江７－６５－２０","市川市相之川１－１－７","市川市湊新田２－９－１２","江戸川区船堀１－８－１５","江戸川区一之江６丁目１７－２７","市川市行徳駅前四丁目１４番１２号","市川市行徳駅前四丁目２２番１","江戸川区江戸川２－３２－１１","市川市入船１４番１","江東区東砂七丁目１９番５号","江東区東砂３－１７","江戸川区瑞江２－５－２１　サイトウビル","市川市宝二丁目１５番４号","江東区東砂３丁目１５－２４　グランデュール吉武","江戸川区松江三丁目９－３","江戸川区春江町二丁目２０番２４号","江東区若洲一丁目１番４号","江戸川区瑞江１－４－１１","江東区新砂３－２－１","江東区大島８－４０－４","江東区北砂５－１４－１６　砂銀ビル","江戸川区新堀一丁目４２－１４","江東区新木場二丁目１０番５号","江東区大島５－３２－１２","江戸川区鹿骨２丁目３６－１２","江東区潮見２－１０－２２","江東区大島５丁目１１－２","江東区大島６丁目１０番３号","江戸川区松島１丁目４２番１９号","江戸川区大杉５丁目２３番１４号","江戸川区篠崎町２－６－１","江戸川区篠崎町７－２９－１１　メナーしのざき","江東区亀戸７－６０－１２","江東区大島四丁目１番３２号","江戸川区松島２丁目２９番３号","江東区潮見１－５－６","江戸川区鹿骨２丁目１８－７フェザンレーヴ","江戸川区上篠崎三丁目１４番１７号","江東区大島３丁目１－６","江東区東陽６丁目３－２","江東区亀戸６－５４－７","江東区東陽１－１６－１２","江東区辰巳１－４－１１","江東区東陽６－２－５６","江東区塩浜二丁目１４番１号","江戸川区平井４－１１－６","江東区亀戸１丁目３２－６　ウイングス・ハイ亀戸","江東区木場５丁目１１－１９大坂屋ビル１階","江東区石島５番８","江戸川区鹿骨５－３９－４","江東区亀戸２－２２－１２","江東区亀戸４－４５－１１","江東区東雲１丁目９－１１－１０４","市川市高谷１６２６－１他","葛飾区新小岩１丁目２９－８","市川市高谷一丁目３番１１号","江東区亀戸２丁目３３－４","墨田区立花３丁目１３－４","市川市東大和田１－２４－２３","江東区白河４丁目２－５","墨田区江東橋４－２９－１３　第２鈴勘ビル","墨田区江東橋四丁目１９番１号","葛飾区東新小岩１丁目４－５","江東区平野二丁目２番２０レジデンス清澄白河","江東区豊洲３－３－９豊洲センタービルアネックス","江東区牡丹３丁目２２番２号","江東区白河２－７－８","墨田区江東橋２丁目１１－５　河口ビル","墨田区錦糸３丁目２－１　アルカイースト","墨田区菊川３－７－５","江東区有明一丁目１番１７号","墨田区江東橋一丁目１３番５号","船橋市本中山５丁目２番４０号","江東区門前仲町２－３－８","市川市南八幡４－１５－１６","江東区白河１－６－１２","墨田区立川３－１０－８","江東区深川２－５－１","墨田区太平三丁目１０番１２号","江東区有明３丁目１０－１国際展示場東展示棟","墨田区菊川１－９－１４","墨田区亀沢４丁目１６－１６　錦糸町Ｙビル","江戸川区南葛西６－１５－２０エスティーム・ＭＳ","市川市南八幡４丁目３番５号","江東区福住１丁目８番１０号","市川市二俣一丁目６番１２号","江東区福住２丁目３－１６","墨田区押上三丁目４２番１２号","市川市新田４－８－２５"];
+const SU_RAW   = ["東京都江戸川区南葛西３丁目１９－９","東京都江戸川区中葛西３丁目３４－１２"];
+const SU_NAMES = ["スシロー南葛西店","スシロー葛西駅前店"];
+const MX_RAW   = ["東京都江戸川区東葛西５丁目２－２"];
+const MX_NAMES = ["マルエツ東葛西店"];
+
+// 地図
+const map = L.map('map', { center:[35.67,139.85], zoom:12 });
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap contributors &copy; CARTO', maxZoom:19
+}).addTo(map);
+
+// 凡例
+const legend = L.control({position:'bottomright'});
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div','legend');
+  d.innerHTML = `<b>凡例</b>
+    <div><span class="ldot" style="background:#7DC832"></span>ファミリーマートビジョン</div>
+    <div><span class="ldot" style="background:#E53935"></span>スシロー</div>
+    <div><span class="ldot" style="background:#FF6D00"></span>マルエツ</div>`;
+  return d;
+};
+legend.addTo(map);
+
+// アイコン
+function makeIcon(color) {
+  return L.divIcon({
+    className:'',
+    html:`<div style="width:26px;height:26px;background:${color};border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 7px rgba(0,0,0,0.4);"></div>`,
+    iconSize:[26,26], iconAnchor:[13,26], popupAnchor:[0,-28]
+  });
+}
+const FM_ICON = makeIcon('#7DC832');
+const SU_ICON = makeIcon('#E53935');
+const MX_ICON = makeIcon('#FF6D00');
+
+// 住所正規化
+function normalizeAddress(addr) {
+  if (!addr) return '';
+  addr = addr.trim().replace(/〒/g,'');
+  addr = addr.replace(/\d{3}[-－‐]\d{4}/g,'').replace(/\d{7}/g,'');
+  addr = addr.replace(/[０-９]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+  addr = addr.replace(/[Ａ-Ｚａ-ｚ]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+  addr = addr.replace(/[－‐ー―−]/g,'-').replace(/　/g,' ').trim();
+  return addr;
+}
+
+// ジオコーディング
+async function geocode(rawAddr) {
+  const addr = normalizeAddress(rawAddr);
+  try {
+    const r = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addr)}`);
+    const d = await r.json();
+    if (d&&d.length>0){ const[lon,lat]=d[0].geometry.coordinates; return{lat,lon}; }
+  } catch(e){}
+  const addrNoNum = addr.replace(/\d+[-]\d+.*$/,'').trim();
+  if (addrNoNum&&addrNoNum!==addr) {
+    try {
+      const r = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addrNoNum)}`);
+      const d = await r.json();
+      if (d&&d.length>0){ const[lon,lat]=d[0].geometry.coordinates; return{lat,lon}; }
+    } catch(e){}
+  }
+  try {
+    const r2 = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1&countrycodes=jp&accept-language=ja`,{headers:{'User-Agent':'MapTool/1.0'}});
+    const d2 = await r2.json();
+    if (d2&&d2.length>0) return{lat:parseFloat(d2[0].lat),lon:parseFloat(d2[0].lon)};
+  } catch(e){}
+  return null;
+}
+
+// レイヤー
+const layers  = { fm:L.layerGroup().addTo(map), su:L.layerGroup().addTo(map), mx:L.layerGroup().addTo(map) };
+const visible = { fm:true, su:true, mx:true };
+
+function toggleLayer(key) {
+  visible[key] = !visible[key];
+  if (visible[key]) map.addLayer(layers[key]); else map.removeLayer(layers[key]);
+  document.getElementById('btn-'+key).classList.toggle('off', !visible[key]);
+}
+
+// ロード
+const errors = [];
+async function loadAll() {
+  document.getElementById('progress-overlay').classList.add('show');
+
+  for (let i=0;i<FM_RAW.length;i++){
+    document.getElementById('progress-text').textContent=`ファミリーマートビジョン読み込み中... (${i+1}/${FM_RAW.length})`;
+    const pos = await geocode(FM_RAW[i]);
+    if (pos) L.marker([pos.lat,pos.lon],{icon:FM_ICON}).addTo(layers.fm).bindPopup(`<b>ファミリーマートビジョン</b><br>${FM_RAW[i]}`);
+    else errors.push('FM: '+FM_RAW[i]);
+  }
+  document.getElementById('cnt-fm').textContent = layers.fm.getLayers().length;
+
+  document.getElementById('progress-text').textContent='スシロー読み込み中...';
+  for (let i=0;i<SU_RAW.length;i++){
+    const pos = await geocode(SU_RAW[i]);
+    if (pos) L.marker([pos.lat,pos.lon],{icon:SU_ICON}).addTo(layers.su).bindPopup(`<b>${SU_NAMES[i]}</b><br>${SU_RAW[i]}`);
+    else errors.push('スシロー: '+SU_NAMES[i]);
+  }
+  document.getElementById('cnt-su').textContent = layers.su.getLayers().length;
+
+  document.getElementById('progress-text').textContent='マルエツ読み込み中...';
+  for (let i=0;i<MX_RAW.length;i++){
+    const pos = await geocode(MX_RAW[i]);
+    if (pos) L.marker([pos.lat,pos.lon],{icon:MX_ICON}).addTo(layers.mx).bindPopup(`<b>${MX_NAMES[i]}</b><br>${MX_RAW[i]}`);
+    else errors.push('マルエツ: '+MX_NAMES[i]);
+  }
+  document.getElementById('cnt-mx').textContent = layers.mx.getLayers().length;
+
+  document.getElementById('progress-overlay').classList.remove('show');
+  if (errors.length>0){
+    document.getElementById('error-panel').style.display='block';
+    document.getElementById('error-list').innerHTML=errors.map(e=>`<div>・${e}</div>`).join('');
+  }
+}
+loadAll();
+</script>
+</body>
+</html>

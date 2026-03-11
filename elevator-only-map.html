@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>エレベーターサイネージ マップ</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Hiragino Sans', 'Meiryo', sans-serif; display: flex; flex-direction: column; height: 100vh; }
+
+/* === トップバナー === */
+#top-banner {
+  background: linear-gradient(135deg, #0f1f3d 0%, #1a3a6b 100%);
+  color: #fff; padding: 8px 16px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+}
+#top-banner .title-area h1 { font-size: 15px; font-weight: 700; }
+#top-banner .title-area p  { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+#top-banner .counts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; }
+#top-banner .counts span { display: flex; align-items: center; gap: 5px; }
+#top-banner .counts .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* === トグルボタン行 === */
+#toggle-bar {
+  background: #fff; padding: 8px 14px; border-bottom: 1px solid #e5e8ef;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.toggle-btn {
+  padding: 6px 14px; border-radius: 20px; border: none;
+  color: #fff; cursor: pointer; font-size: 12px; font-weight: 700;
+  opacity: 1; transition: opacity .2s, transform .1s;
+  display: flex; align-items: center; gap: 5px;
+}
+.toggle-btn.off { opacity: 0.35; }
+.toggle-btn:active { transform: scale(0.96); }
+.hint { margin-left: auto; font-size: 11px; color: #999; }
+
+#map { flex: 1; }
+
+/* プログレス */
+#progress-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.82);
+  z-index: 9999; align-items: center; justify-content: center; flex-direction: column;
+}
+#progress-overlay.show { display: flex; }
+.spinner { width: 44px; height: 44px; border: 4px solid #e0e6f0; border-top-color: #4A8FD4; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#progress-text { font-size: 13px; color: #444; font-weight: 600; }
+
+/* エラーパネル */
+#error-panel { display:none; position:fixed; bottom:20px; right:20px; max-width:320px; background:#fff3f3; border:1px solid #f5c6cb; border-radius:8px; padding:12px; font-size:11px; z-index:1000; max-height:200px; overflow-y:auto; }
+#error-panel h4 { color:#c62828; margin-bottom:6px; }
+
+/* 凡例 */
+.legend { background:rgba(255,255,255,0.93); border-radius:6px; padding:10px 14px; box-shadow:0 2px 8px rgba(0,0,0,0.13); font-size:12px; line-height:2; }
+.legend b { display:block; margin-bottom:2px; color:#444; }
+.ldot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+</style>
+</head>
+<body>
+
+<!-- トップバナー -->
+<div id="top-banner">
+  <div class="title-area">
+    <h1>サイネージ配信マップ</h1>
+    <p>エレベーターサイネージ</p>
+  </div>
+  <div class="counts">
+    <span><span class="dot" style="background:#4A8FD4"></span>EL: <b id="cnt-el">0</b>/<span id="tot-el">37</span>件</span>
+  </div>
+</div>
+
+<!-- トグルボタン -->
+<div id="toggle-bar">
+  <button class="toggle-btn" id="btn-el" style="background:#4A8FD4;" onclick="toggleLayer()">
+    ● エレベーターサイネージ
+  </button>
+  <span class="hint">ピンをクリックすると住所が表示されます</span>
+</div>
+
+<div id="map"></div>
+<div id="progress-overlay"><div class="spinner"></div><div id="progress-text">読み込み中...</div></div>
+<div id="error-panel"><h4>⚠️ 住所未取得リスト</h4><div id="error-list"></div></div>
+
+<script>
+const EL_RAW = ["東京都江戸川区西葛西２丁目２２番２６号","千葉県市川市幸２丁目６番１号","東京都江戸川区西葛西２丁目２２番４５号","東京都江戸川区西葛西３丁目８番７号","東京都江戸川区南葛西６丁目１７番１５号","東京都江東区東砂７丁目１０番１７号","千葉県浦安市東野２丁目２３番６号","東京都江戸川区一之江８丁目４番１４号","東京都江戸川区南葛西２丁目３番３号","千葉県市川市南行徳２丁目１９番３号","東京都江戸川区中葛西５丁目４１番５号","千葉県浦安市北栄３丁目２２番５号","東京都江戸川区一之江７丁目６６番２３号","東京都江戸川区中葛西６丁目１１番","東京都江戸川区船堀４丁目１２番５号","千葉県浦安市猫実５丁目１８番１７号","東京都江戸川区南篠崎町３丁目６番１１号","東京都江戸川区船堀５丁目３番２２号","東京都江戸川区南葛西２丁目２番１２号","東京都江東区東砂３丁目１７番２０号","東京都江戸川区瑞江１丁目６２番１０号","東京都江戸川区西葛西３丁目１番９号","東京都江戸川区東葛西５丁目１８番９号","東京都江戸川区南葛西２丁目２２番１号","東京都江戸川区中葛西７丁目２７番１５号","東京都江戸川区中葛西７丁目９番５号","千葉県浦安市富士見５丁目２番２６号","東京都江戸川区中葛西７丁目１０番２０号","千葉県浦安市堀江４丁目１番３３号","千葉県浦安市北栄２丁目７番１６号","千葉県市川市南行徳１丁目１６番２０号","東京都江東区東砂６丁目７番２号","千葉県浦安市当代島１丁目３０番４号","東京都江戸川区船堀２丁目１５番１３号","東京都江戸川区東葛西６丁目２８番８号","千葉県浦安市富士見４丁目１０番２６号","千葉県浦安市富士見４丁目６番３２号"];
+
+const map = L.map('map', { center:[35.67,139.85], zoom:12 });
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap contributors &copy; CARTO', maxZoom:19
+}).addTo(map);
+
+const legend = L.control({position:'bottomright'});
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div','legend');
+  d.innerHTML = `<b>凡例</b><div><span class="ldot" style="background:#4A8FD4"></span>エレベーターサイネージ</div>`;
+  return d;
+};
+legend.addTo(map);
+
+const EL_ICON = L.divIcon({
+  className:'',
+  html:`<div style="width:26px;height:26px;background:#4A8FD4;border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 7px rgba(0,0,0,0.4);"></div>`,
+  iconSize:[26,26], iconAnchor:[13,26], popupAnchor:[0,-28]
+});
+
+function normalizeAddress(addr) {
+  if (!addr) return '';
+  addr = addr.trim().replace(/〒/g,'');
+  addr = addr.replace(/\d{3}[-－‐]\d{4}/g,'').replace(/\d{7}/g,'');
+  addr = addr.replace(/[０-９]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+  addr = addr.replace(/[Ａ-Ｚａ-ｚ]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+  addr = addr.replace(/[－‐ー―−]/g,'-').replace(/　/g,' ').trim();
+  return addr;
+}
+
+async function geocode(rawAddr) {
+  const addr = normalizeAddress(rawAddr);
+  try {
+    const r = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addr)}`);
+    const d = await r.json();
+    if (d&&d.length>0){ const[lon,lat]=d[0].geometry.coordinates; return{lat,lon}; }
+  } catch(e){}
+  const addrNoNum = addr.replace(/\d+[-]\d+.*$/,'').trim();
+  if (addrNoNum&&addrNoNum!==addr) {
+    try {
+      const r = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addrNoNum)}`);
+      const d = await r.json();
+      if (d&&d.length>0){ const[lon,lat]=d[0].geometry.coordinates; return{lat,lon}; }
+    } catch(e){}
+  }
+  try {
+    const r2 = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1&countrycodes=jp&accept-language=ja`,{headers:{'User-Agent':'MapTool/1.0'}});
+    const d2 = await r2.json();
+    if (d2&&d2.length>0) return{lat:parseFloat(d2[0].lat),lon:parseFloat(d2[0].lon)};
+  } catch(e){}
+  return null;
+}
+
+const elLayer = L.layerGroup().addTo(map);
+let elVisible = true;
+
+function toggleLayer() {
+  elVisible = !elVisible;
+  if (elVisible) map.addLayer(elLayer); else map.removeLayer(elLayer);
+  document.getElementById('btn-el').classList.toggle('off', !elVisible);
+}
+
+const errors = [];
+async function loadAll() {
+  document.getElementById('progress-overlay').classList.add('show');
+  for (let i=0;i<EL_RAW.length;i++){
+    document.getElementById('progress-text').textContent=`エレベーターサイネージ読み込み中... (${i+1}/${EL_RAW.length})`;
+    const pos = await geocode(EL_RAW[i]);
+    if (pos) L.marker([pos.lat,pos.lon],{icon:EL_ICON}).addTo(elLayer).bindPopup(`<b>エレベーターサイネージ</b><br>${EL_RAW[i]}`);
+    else errors.push(EL_RAW[i]);
+  }
+  document.getElementById('cnt-el').textContent = elLayer.getLayers().length;
+  document.getElementById('progress-overlay').classList.remove('show');
+  if (errors.length>0){
+    document.getElementById('error-panel').style.display='block';
+    document.getElementById('error-list').innerHTML=errors.map(e=>`<div>・${e}</div>`).join('');
+  }
+}
+loadAll();
+</script>
+</body>
+</html>
